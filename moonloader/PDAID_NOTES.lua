@@ -761,6 +761,11 @@ function main()
     while true do
         wait(0)
 
+        -- Raccourci direct F10 (0x79) pour ouvrir/fermer le carnet
+        if isKeyJustPressed(0x79) then
+            do_toggle()
+        end
+
         -- Consomme la requete de toggle envoyee par PDAID_QMENU via pdaid_shared
         if pdaid_shared.notebook_request then
             pdaid_shared.notebook_request = false

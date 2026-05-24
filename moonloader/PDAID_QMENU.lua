@@ -1,19 +1,13 @@
 script_name("LSPD AID - Menu Roue")
 script_description("Pie menu actions police (taser, menottes, vehicule...)")
-script_version("7.2.0")
+script_version("7.3.0")
 script_author("LGU")
 
 -- Compatible : MoonLoader 0.26.5-beta, SAMPFUNCS 5.7.1 rel.25, SA-MP 0.3.DL, GTA SA 1.0 US
 
 require('sampfuncs')
-local imgui      = require('mimgui')
-local ffi        = require('ffi')
-local pdaid_shared = require('pdaid_shared')
-
--- Demande d'ouverture/fermeture du carnet via le module partage inter-scripts
-local function try_toggle_notebook()
-    pdaid_shared.notebook_request = true
-end
+local imgui = require('mimgui')
+local ffi   = require('ffi')
 
 -- ════════════════════════════════════════════════════════════════════════════
 --  CURSOR POSITION  (Windows API — position absolue ecran)
@@ -35,6 +29,8 @@ local pie_open        = false
 local controls_locked = false  -- suivi exact du lockPlayerControl (evite double-lock/unlock)
 local taser_out       = false
 local beanbag_out     = false
+local plaquage_out    = false
+local balise_on       = false
 local last_toggle     = 0
 local hovered         = -1
 local target          = nil
@@ -48,14 +44,16 @@ local pending_cmd     = nil    -- commande a executer depuis main() (jamais depu
 
 local ITEMS = {
     { angle=  0, cmd="/taser",        cat="arm",  key="1"                },
-    { angle= 40, cmd="/beanbag",      cat="arm",  key="2"                },
-    { angle= 80, cmd="/menotter",     cat="int",  key="3", needs_id=true },
-    { angle=120, cmd="/demenotter",   cat="int",  key="4", needs_id=true },
-    { angle=160, cmd="/v coffre",     cat="veh",  key="5"                },
-    { angle=200, cmd="/v coffrelock", cat="veh",  key="6"                },
-    { angle=240, cmd="/v lock",       cat="veh",  key="7"                },
-    { angle=280, cmd="/vehporte",     cat="veh",  key="8"                },
-    { angle=320, cmd="__notebook__",  cat="note", key="9"                },
+    { angle= 33, cmd="/beanbag",      cat="arm",  key="2"                },
+    { angle= 65, cmd="/plaquage",     cat="arm",  key="3"                },
+    { angle= 98, cmd="/menotter",     cat="int",  key="4", needs_id=true },
+    { angle=131, cmd="/demenotter",   cat="int",  key="5", needs_id=true },
+    { angle=164, cmd="/911",          cat="int",  key="6"                },
+    { angle=196, cmd="/v coffre",     cat="veh",  key="7"                },
+    { angle=229, cmd="/v coffrelock", cat="veh",  key="8"                },
+    { angle=262, cmd="/v lock",       cat="veh",  key="9"                },
+    { angle=295, cmd="/vehporte",     cat="veh",  key="0"                },
+    { angle=327, cmd="/balise",       cat="nav",  key="B"                },
 }
 
 local LABELS = {
@@ -65,12 +63,14 @@ local LABELS = {
     ["/vehporte"]     = "Porte",
     ["/menotter"]     = "Menotter",
     ["/demenotter"]   = "Demenotter",
-    ["__notebook__"]  = "Carnet\nd'enquete",
+    ["/911"]          = "911\nAccepter",
 }
 
 local function getLabel(cmd)
-    if cmd == "/taser"   then return taser_out   and "Ranger\nTaser"   or "Sortir\nTaser"   end
-    if cmd == "/beanbag" then return beanbag_out and "Ranger\nBeanbag" or "Sortir\nBeanbag" end
+    if cmd == "/taser"    then return taser_out    and "Ranger\nTaser"   or "Sortir\nTaser"   end
+    if cmd == "/beanbag"  then return beanbag_out  and "Ranger\nBeanbag" or "Sortir\nBeanbag" end
+    if cmd == "/plaquage" then return plaquage_out and "Lacher\nPlaquage" or "Plaquer"         end
+    if cmd == "/balise"   then return balise_on    and "Balise\nOFF"     or "Balise\nON"      end
     return LABELS[cmd] or cmd
 end
 
@@ -83,7 +83,7 @@ local C = {
     arm_def  = 0x88503020,  arm_hov  = 0xCCFF8844,
     int_def  = 0x88304050,  int_hov  = 0xCC22AAFF,
     veh_def  = 0x88305030,  veh_hov  = 0xCC55CC33,
-    note_def = 0x88B8860B,  note_hov = 0xCCFFD700,
+    nav_def  = 0x88203050,  nav_hov  = 0xCC2288FF,
     center   = 0xDD0D0D18,
     text     = 0xEEFFFFFF,
     text_hov = 0xFF00FFFF,
@@ -97,7 +97,7 @@ local C = {
 
 local R_OUT    = 178
 local R_IN     = 58
-local SEG_HALF = 40/2 - 2.5   -- 9 tranches : 40 degres chacune, 5 degres de gap
+local SEG_HALF = 360/11/2 - 2.5   -- 11 tranches : ~32.7 degres chacune, 5 degres de gap
 local R_TEXT   = (R_IN + R_OUT) * 0.5
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -168,6 +168,9 @@ end
 -- ════════════════════════════════════════════════════════════════════════════
 
 local function buildCmd(item)
+    if item.cmd == "/balise" then
+        return balise_on and "/balise on" or "/balise off"
+    end
     if item.needs_id and target then
         return item.cmd .. " " .. target.id
     end
@@ -178,21 +181,19 @@ end
 -- INTERDIT : wait(), lockPlayerControl(), sampSendChat() ici.
 -- Tout ca se passe dans main() au prochain tick.
 local function selectItem(item)
-    if item.cmd == "__notebook__" then
-        try_toggle_notebook()
-        pie_open = false
-        return  -- pas de pending_cmd, unlock fait par le watchdog dans main()
-    end
     if item.cmd == "/taser" then
         taser_out = not taser_out
         if taser_out then beanbag_out = false end
     elseif item.cmd == "/beanbag" then
         beanbag_out = not beanbag_out
         if beanbag_out then taser_out = false end
+    elseif item.cmd == "/plaquage" then
+        plaquage_out = not plaquage_out
+    elseif item.cmd == "/balise" then
+        balise_on = not balise_on
     end
     pending_cmd = buildCmd(item)
     pie_open    = false
-    -- L'unlock et sampSendChat se font dans main() via pending_cmd
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -288,7 +289,7 @@ imgui.OnFrame(
                     local fill
                     if     item.cat == "arm"  then fill = is_h and C.arm_hov  or C.arm_def
                     elseif item.cat == "int"  then fill = is_h and C.int_hov  or C.int_def
-                    elseif item.cat == "note" then fill = is_h and C.note_hov or C.note_def
+                    elseif item.cat == "nav"  then fill = is_h and C.nav_hov  or C.nav_def
                     else                           fill = is_h and C.veh_hov  or C.veh_def
                     end
                     drawSlice(dl, cx, cy, item.angle, fill)
@@ -368,7 +369,7 @@ function main()
     wait(500)
 
     sampAddChatMessage(
-        "{00AAFF}[LSPD AID]{FFFFFF} Menu Roue v7.2 -- {FFFF00}X{FFFFFF} = ouvrir",
+        "{00AAFF}[LSPD AID]{FFFFFF} Menu Roue v7.3 -- {FFFF00}X{FFFFFF} = ouvrir",
         -1)
 
     while true do

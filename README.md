@@ -23,7 +23,7 @@
 
 ### 🎯 PDAID_QMENU — Menu Roue
 
-Pie menu radial à **9 tranches**, déclenché par un raccourci clavier (`X` par défaut).  
+Pie menu radial à **11 tranches**, déclenché par un raccourci clavier (`X` par défaut).  
 Exécute instantanément les commandes RP police sans jamais ouvrir le tchat.  
 La sélection se fait en maintenant la touche et déplaçant la souris vers la tranche souhaitée.
 
@@ -31,13 +31,15 @@ La sélection se fait en maintenant la touche et déplaçant la souris vers la t
 |:-:|----------|-------------|
 | 1 | `/taser` | Dégainer / rengainer le taser |
 | 2 | `/beanbag` | Dégainer / rengainer le beanbag |
-| 3 | `/menottes` | Passer les menottes à la cible la plus proche |
-| 4 | `/fouiller` | Fouiller un joueur |
-| 5 | `/permis` | Vérifier le permis de conduire |
-| 6 | `/casier` | Consulter le casier judiciaire |
-| 7 | `/remorquer` | Demander une dépanneuse |
-| 8 | `/coffre` | Ouvrir / Fermer le coffre du véhicule |
-| 9 | 📓 Carnet | Ouvrir le carnet d'enquête |
+| 3 | `/plaquage` | Activer / désactiver le plaquage (toggle) |
+| 4 | `/menotter` | Passer les menottes à la cible la plus proche |
+| 5 | `/demenotter` | Retirer les menottes de la cible |
+| 6 | `/911` | Accepter le dernier appel 911 |
+| 7 | `/v coffre` | Voir le contenu du coffre |
+| 8 | `/v coffrelock` | Verrouiller / déverrouiller le coffre |
+| 9 | `/v lock` | Verrouiller / déverrouiller le véhicule |
+| 10 | `/vehporte` | Ouvrir / fermer les portes |
+| 11 | `/balise` | Activer (`/balise on`) ou désactiver (`/balise off`) la balise GPS (toggle) |
 
 ---
 
@@ -92,7 +94,7 @@ GTA San Andreas/
 Confirmation dans le tchat :
 
 ```
-[LSPD AID] Menu Roue v7.2 chargé  --  X = ouvrir
+[LSPD AID] Menu Roue v7.3 chargé  --  X = ouvrir
 [LSPD AID] Carnet v1.0.1 chargé
 ```
 
