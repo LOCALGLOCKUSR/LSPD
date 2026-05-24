@@ -643,6 +643,7 @@ imgui.OnFrame(
     function() return notebook_open end,
     function(self)
         self.HideCursor = false
+        self.LockPlayer = false
 
         if nb_first_open then
             local sw, sh = getScreenResolution()
@@ -655,70 +656,76 @@ imgui.OnFrame(
 
         imgui.SetNextWindowSize(imgui.ImVec2(820, 560), imgui.Cond.Always)
 
-        imgui.PushStyleColorU32(imgui.Col.WindowBg,       imgui.U32(0.10, 0.10, 0.18, 1.0))
-        imgui.PushStyleColorU32(imgui.Col.TitleBgActive,  imgui.U32(0.18, 0.18, 0.38, 1.0))
-        imgui.PushStyleColorU32(imgui.Col.TitleBg,        imgui.U32(0.14, 0.14, 0.28, 1.0))
-        imgui.PushStyleColorU32(imgui.Col.Border,         imgui.U32(0.23, 0.23, 0.36, 1.0))
-        imgui.PushStyleColorU32(imgui.Col.FrameBg,        imgui.U32(0.12, 0.12, 0.22, 1.0))
-        imgui.PushStyleColorU32(imgui.Col.FrameBgHovered, imgui.U32(0.17, 0.17, 0.30, 1.0))
-        imgui.PushStyleColorU32(imgui.Col.Button,         imgui.U32(0.16, 0.26, 0.16, 1.0))
-        imgui.PushStyleColorU32(imgui.Col.ButtonHovered,  imgui.U32(0.22, 0.42, 0.22, 1.0))
-        imgui.PushStyleColorU32(imgui.Col.Header,         imgui.U32(0.20, 0.20, 0.40, 1.0))
-        imgui.PushStyleColorU32(imgui.Col.HeaderHovered,  imgui.U32(0.28, 0.28, 0.55, 1.0))
-        local N_COL = 10
+        -- Compteur de PushStyleColor pour garantir le PopStyleColor meme en cas d'erreur
+        local push_n   = 0
+        local began    = false
+        local function ps(col, clr) imgui.PushStyleColorU32(col, clr); push_n = push_n + 1 end
 
-        p_open[0] = true
-        local wflags = imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse
+        local ok, err = xpcall(function()
+            ps(imgui.Col.WindowBg,       imgui.U32(0.10, 0.10, 0.18, 1.0))
+            ps(imgui.Col.TitleBgActive,  imgui.U32(0.18, 0.18, 0.38, 1.0))
+            ps(imgui.Col.TitleBg,        imgui.U32(0.14, 0.14, 0.28, 1.0))
+            ps(imgui.Col.Border,         imgui.U32(0.23, 0.23, 0.36, 1.0))
+            ps(imgui.Col.FrameBg,        imgui.U32(0.12, 0.12, 0.22, 1.0))
+            ps(imgui.Col.FrameBgHovered, imgui.U32(0.17, 0.17, 0.30, 1.0))
+            ps(imgui.Col.Button,         imgui.U32(0.16, 0.26, 0.16, 1.0))
+            ps(imgui.Col.ButtonHovered,  imgui.U32(0.22, 0.42, 0.22, 1.0))
+            ps(imgui.Col.Header,         imgui.U32(0.20, 0.20, 0.40, 1.0))
+            ps(imgui.Col.HeaderHovered,  imgui.U32(0.28, 0.28, 0.55, 1.0))
 
-        local opened = imgui.Begin("[ PDAID - Carnet d'enquete ]##nb_win", p_open, wflags)
+            p_open[0] = true
+            local wflags = imgui.WindowFlags.NoResize + imgui.WindowFlags.NoCollapse
+            local opened = imgui.Begin("[ PDAID - Carnet d'enquete ]##nb_win", p_open, wflags)
+            began = true
 
-        if not p_open[0] then
-            flush_bufs_to_page()
+            if not p_open[0] then
+                flush_bufs_to_page()
+                notebook_open = false
+                nb_first_open = true
+            end
+
+            if opened then
+                pcall(function()
+                    local pg = get_active_page()
+                    if pg and pg.id ~= cur_page_id then sync_bufs_from_page() end
+
+                    local avail_w = imgui.GetContentRegionAvail().x
+                    local avail_h = imgui.GetContentRegionAvail().y
+                    local LEFT_W  = 185
+                    local RIGHT_W = 190
+                    local sp      = imgui.GetStyle().ItemSpacing.x
+                    local MID_W   = avail_w - LEFT_W - RIGHT_W - sp * 2
+
+                    ps(imgui.Col.ChildBg, imgui.U32(0.08, 0.08, 0.15, 0.6))
+
+                    imgui.BeginChild("##nb_left",  imgui.ImVec2(LEFT_W, avail_h), true)
+                    pcall(draw_left_col)
+                    imgui.EndChild()
+                    imgui.SameLine()
+                    imgui.BeginChild("##nb_mid", imgui.ImVec2(MID_W, avail_h), true)
+                    pcall(draw_mid_col)
+                    imgui.EndChild()
+                    imgui.SameLine()
+                    imgui.BeginChild("##nb_right", imgui.ImVec2(RIGHT_W, avail_h), true)
+                    pcall(draw_right_col)
+                    imgui.EndChild()
+
+                    imgui.PopStyleColor(1); push_n = push_n - 1
+
+                    pcall(draw_popup_new)
+                    pcall(draw_popup_del)
+                end)
+            end
+        end, tostring)
+
+        if began    then imgui.End() end
+        if push_n > 0 then imgui.PopStyleColor(push_n) end
+
+        if not ok then
+            print("[PDAID_NOTES] ERREUR DRAW: " .. tostring(err))
             notebook_open = false
             nb_first_open = true
         end
-
-        if opened then
-            pcall(function()
-                local pg = get_active_page()
-                if pg and pg.id ~= cur_page_id then
-                    sync_bufs_from_page()
-                end
-
-                local avail_w = imgui.GetContentRegionAvail().x
-                local avail_h = imgui.GetContentRegionAvail().y
-                local LEFT_W  = 185
-                local RIGHT_W = 190
-                local sp      = imgui.GetStyle().ItemSpacing.x
-                local MID_W   = avail_w - LEFT_W - RIGHT_W - sp * 2
-
-                imgui.PushStyleColorU32(imgui.Col.ChildBg, imgui.U32(0.08, 0.08, 0.15, 0.6))
-
-                imgui.BeginChild("##nb_left",  imgui.ImVec2(LEFT_W, avail_h), true)
-                pcall(draw_left_col)
-                imgui.EndChild()
-
-                imgui.SameLine()
-
-                imgui.BeginChild("##nb_mid", imgui.ImVec2(MID_W, avail_h), true)
-                pcall(draw_mid_col)
-                imgui.EndChild()
-
-                imgui.SameLine()
-
-                imgui.BeginChild("##nb_right", imgui.ImVec2(RIGHT_W, avail_h), true)
-                pcall(draw_right_col)
-                imgui.EndChild()
-
-                imgui.PopStyleColor(1)
-
-                pcall(draw_popup_new)
-                pcall(draw_popup_del)
-            end)
-        end
-
-        imgui.End()
-        imgui.PopStyleColor(N_COL)
 
         if notebook_open and isKeyJustPressed(0x1B) and not imgui.IsAnyItemActive() then
             flush_bufs_to_page()
