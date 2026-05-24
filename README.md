@@ -8,7 +8,7 @@
 [![SA-MP](https://img.shields.io/badge/SA--MP-0.3.DL--R1-orange?style=flat-square)](https://sa-mp.mp/)
 [![MoonLoader](https://img.shields.io/badge/MoonLoader-0.26.5--beta-brightgreen?style=flat-square)](https://github.com/imring/moonloader)
 [![SAMPFUNCS](https://img.shields.io/badge/SAMPFUNCS-5.7.1-red?style=flat-square)](https://blast.hk/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-red?style=flat-square)](LICENSE)
 [![LuaJIT](https://img.shields.io/badge/LuaJIT-2.1-blue?style=flat-square&logo=lua&logoColor=white)](https://luajit.org/)
 
 <br/>
@@ -139,13 +139,18 @@ moonloader/
 
 ## 📄 Licence
 
-Ce projet est distribué sous licence **MIT** — libre d'utilisation, de modification et de redistribution avec attribution.  
+Ce projet est distribué sous licence **GPL v3** avec clauses additionnelles :
+
+- Tout fork ou dérivé doit rester **open source** sous la même licence
+- **Pas d'utilisation commerciale** sans autorisation écrite
+- Toute modification doit mentionner clairement l'auteur original et lier vers ce dépôt
+
 Voir le fichier [LICENSE](LICENSE) pour les détails complets.
 
 ---
 
 <div align="center">
 
-Fait avec ❤️ pour le RP GTA SA — Division LSPD
+Fait avec ❤️ pour le RP GTA SA — LEO
 
 </div>
