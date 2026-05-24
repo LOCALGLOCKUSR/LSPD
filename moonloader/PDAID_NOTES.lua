@@ -5,9 +5,8 @@ script_author("LGU")
 
 -- Compatible : MoonLoader 0.26.5-beta, SAMPFUNCS 5.7.1, SA-MP 0.3.DL
 
-local imgui      = require('mimgui')
-local ffi        = require('ffi')
-local pdaid_shared = require('pdaid_shared')
+local imgui = require('mimgui')
+local ffi   = require('ffi')
 
 -- ============================================================================
 --  JSON MINIMAL (LuaJIT 2.1 / Lua 5.1 -- pas de dependances externes)
@@ -763,12 +762,6 @@ function main()
 
         -- Raccourci direct F10 (0x79) pour ouvrir/fermer le carnet
         if isKeyJustPressed(0x79) then
-            do_toggle()
-        end
-
-        -- Consomme la requete de toggle envoyee par PDAID_QMENU via pdaid_shared
-        if pdaid_shared.notebook_request then
-            pdaid_shared.notebook_request = false
             do_toggle()
         end
 

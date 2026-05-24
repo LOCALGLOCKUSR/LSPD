@@ -1,6 +1,6 @@
 script_name("LSPD AID - Menu Roue")
 script_description("Pie menu actions police (taser, menottes, vehicule...)")
-script_version("7.3.0")
+script_version("7.4.0")
 script_author("LGU")
 
 -- Compatible : MoonLoader 0.26.5-beta, SAMPFUNCS 5.7.1 rel.25, SA-MP 0.3.DL, GTA SA 1.0 US
@@ -10,12 +10,15 @@ local imgui = require('mimgui')
 local ffi   = require('ffi')
 
 -- ════════════════════════════════════════════════════════════════════════════
---  CURSOR POSITION  (Windows API — position absolue ecran)
+--  WINDOWS API  (curseur + simulation clavier)
 -- ════════════════════════════════════════════════════════════════════════════
 
 ffi.cdef('typedef struct { long x; long y; } QM_PT; int __stdcall GetCursorPos(QM_PT*);')
+ffi.cdef('void __stdcall keybd_event(unsigned char bVk, unsigned char bScan, unsigned long dwFlags, unsigned long dwExtraInfo);')
+
 local _u32 = ffi.load('user32')
 local _pt  = ffi.new('QM_PT')
+
 local function mouseXY()
     pcall(_u32.GetCursorPos, _pt)
     return _pt.x, _pt.y
@@ -26,7 +29,7 @@ end
 -- ════════════════════════════════════════════════════════════════════════════
 
 local pie_open        = false
-local controls_locked = false  -- suivi exact du lockPlayerControl (evite double-lock/unlock)
+local controls_locked = false
 local taser_out       = false
 local beanbag_out     = false
 local plaquage_out    = false
@@ -34,27 +37,56 @@ local balise_on       = false
 local last_toggle     = 0
 local hovered         = -1
 local target          = nil
-local pending_cmd     = nil    -- commande a executer depuis main() (jamais depuis OnFrame)
+local pending_cmd     = nil   -- commande samp a executer dans main()
+local pending_key     = nil   -- VK a simuler dans main() (ex. 0x4E = N pour lumieres)
 
 -- ════════════════════════════════════════════════════════════════════════════
 --  ITEMS DU PIE
---  angle : 0=droite, 90=bas, sens horaire
---  needs_id : true = ajoute l'ID du joueur le plus proche a la commande
+--  in_veh=true : tranche visible uniquement lorsque le joueur est en vehicule
+--  needs_id    : ajoute l'ID du joueur le plus proche a la commande
 -- ════════════════════════════════════════════════════════════════════════════
 
-local ITEMS = {
-    { angle=  0, cmd="/taser",        cat="arm",  key="1"                },
-    { angle= 33, cmd="/beanbag",      cat="arm",  key="2"                },
-    { angle= 65, cmd="/plaquage",     cat="arm",  key="3"                },
-    { angle= 98, cmd="/menotter",     cat="int",  key="4", needs_id=true },
-    { angle=131, cmd="/demenotter",   cat="int",  key="5", needs_id=true },
-    { angle=164, cmd="/911",          cat="int",  key="6"                },
-    { angle=196, cmd="/v coffre",     cat="veh",  key="7"                },
-    { angle=229, cmd="/v coffrelock", cat="veh",  key="8"                },
-    { angle=262, cmd="/v lock",       cat="veh",  key="9"                },
-    { angle=295, cmd="/vehporte",     cat="veh",  key="0"                },
-    { angle=327, cmd="/balise",       cat="nav",  key="B"                },
+local ITEMS_BASE = {
+    { cmd="/taser",        cat="arm",  key="1"                        },
+    { cmd="/beanbag",      cat="arm",  key="2"                        },
+    { cmd="/plaquage",     cat="arm",  key="3"                        },
+    { cmd="/menotter",     cat="int",  key="4", needs_id=true         },
+    { cmd="/demenotter",   cat="int",  key="5", needs_id=true         },
+    { cmd="/911",          cat="int",  key="6"                        },
+    { cmd="/v coffre",     cat="veh",  key="7"                        },
+    { cmd="/v coffrelock", cat="veh",  key="8"                        },
+    { cmd="/v lock",       cat="veh",  key="9"                        },
+    { cmd="/vehporte",     cat="veh",  key="0"                        },
+    { cmd="/balise",       cat="nav",  key="B"                        },
+    { cmd="__lights__",    cat="veh",  key="L",  in_veh=true          },
 }
+
+-- Liste active et geometrie — recalcules a chaque ouverture du pie
+local ITEMS    = {}
+local SEG_HALF = 360/11/2 - 2.5
+
+local function buildActiveItems()
+    local in_vehicle = false
+    if PLAYER_PED and PLAYER_PED ~= 0 then
+        local ok, r = pcall(isCharInAnyCar, PLAYER_PED)
+        in_vehicle = ok and r
+    end
+    ITEMS = {}
+    for _, item in ipairs(ITEMS_BASE) do
+        if not item.in_veh or in_vehicle then
+            ITEMS[#ITEMS+1] = item
+        end
+    end
+    local n = #ITEMS
+    SEG_HALF = 360/n/2 - 2.5
+    for i, item in ipairs(ITEMS) do
+        item.angle = (i-1) * (360/n)
+    end
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+--  LABELS
+-- ════════════════════════════════════════════════════════════════════════════
 
 local LABELS = {
     ["/v coffre"]     = "Voir\nCoffre",
@@ -67,10 +99,11 @@ local LABELS = {
 }
 
 local function getLabel(cmd)
-    if cmd == "/taser"    then return taser_out    and "Ranger\nTaser"   or "Sortir\nTaser"   end
-    if cmd == "/beanbag"  then return beanbag_out  and "Ranger\nBeanbag" or "Sortir\nBeanbag" end
-    if cmd == "/plaquage" then return plaquage_out and "Lacher\nPlaquage" or "Plaquer"         end
-    if cmd == "/balise"   then return balise_on    and "Balise\nOFF"     or "Balise\nON"      end
+    if cmd == "/taser"     then return taser_out    and "Ranger\nTaser"    or "Sortir\nTaser"    end
+    if cmd == "/beanbag"   then return beanbag_out  and "Ranger\nBeanbag"  or "Sortir\nBeanbag"  end
+    if cmd == "/plaquage"  then return plaquage_out and "Lacher\nPlaquage" or "Plaquer"           end
+    if cmd == "/balise"    then return balise_on    and "Balise\nOFF"      or "Balise\nON"        end
+    if cmd == "__lights__" then return "Lumieres\nON/OFF"                                         end
     return LABELS[cmd] or cmd
 end
 
@@ -92,17 +125,15 @@ local C = {
 }
 
 -- ════════════════════════════════════════════════════════════════════════════
---  GEOMETRIE
+--  GEOMETRIE  (SEG_HALF est calcule dynamiquement dans buildActiveItems)
 -- ════════════════════════════════════════════════════════════════════════════
 
-local R_OUT    = 178
-local R_IN     = 58
-local SEG_HALF = 360/11/2 - 2.5   -- 11 tranches : ~32.7 degres chacune, 5 degres de gap
-local R_TEXT   = (R_IN + R_OUT) * 0.5
+local R_OUT  = 178
+local R_IN   = 58
+local R_TEXT = (R_IN + R_OUT) * 0.5
 
 -- ════════════════════════════════════════════════════════════════════════════
---  GESTION CONTROLES (centralisee — appelee UNIQUEMENT depuis main())
---  Ne jamais appeler lockControls/unlockControls depuis imgui.OnFrame.
+--  GESTION CONTROLES (uniquement depuis main())
 -- ════════════════════════════════════════════════════════════════════════════
 
 local function lockControls()
@@ -113,7 +144,7 @@ end
 
 local function unlockControls()
     pcall(lockPlayerControl, false)
-    controls_locked = false  -- reset meme si pcall echoue
+    controls_locked = false
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -178,9 +209,14 @@ local function buildCmd(item)
 end
 
 -- Appelee depuis imgui.OnFrame : ne fait QUE setter les flags.
--- INTERDIT : wait(), lockPlayerControl(), sampSendChat() ici.
--- Tout ca se passe dans main() au prochain tick.
+-- wait(), lockPlayerControl(), sampSendChat() sont INTERDITS ici.
 local function selectItem(item)
+    if item.cmd == "__lights__" then
+        pending_cmd = "/gyro"
+        pending_key = 0x4E   -- touche N (lumieres vehicule)
+        pie_open    = false
+        return
+    end
     if item.cmd == "/taser" then
         taser_out = not taser_out
         if taser_out then beanbag_out = false end
@@ -224,14 +260,10 @@ end
 -- ════════════════════════════════════════════════════════════════════════════
 --  RENDU PIE MENU
 --
---  ARCHITECTURE IMPORTANTE :
---  imgui.OnFrame tourne dans le hook D3D9 Present, PAS dans la coroutine main().
---  => wait() est INTERDIT ici (yield du mauvais contexte = freeze garanti)
---  => lockPlayerControl() est INTERDIT ici (gere dans main())
---  => sampSendChat() est INTERDIT ici (gere dans main() via pending_cmd)
---
---  Le corps de rendu est entoure d'un pcall : si une erreur Lua survient
---  pendant le dessin, le menu se ferme proprement et main() libere les controles.
+--  ARCHITECTURE :
+--  imgui.OnFrame => hook D3D9 Present, hors coroutine main().
+--  wait() / lockPlayerControl() / sampSendChat() INTERDITS ici.
+--  Toute action se fait dans main() via pending_cmd / pending_key.
 -- ════════════════════════════════════════════════════════════════════════════
 
 imgui.OnFrame(
@@ -259,8 +291,6 @@ imgui.OnFrame(
         local opened = imgui.Begin("##pdaid_pie", nil, wflags)
 
         if opened then
-            -- pcall sur le contenu uniquement : Begin/End et PushStyleVar/PopStyleVar
-            -- restent toujours equilibres meme en cas d'erreur.
             local ok = pcall(function()
                 local dl = imgui.GetWindowDrawList()
 
@@ -280,17 +310,15 @@ imgui.OnFrame(
                     end
                 end
 
-                -- Fond semi-transparent
                 dl:AddRectFilled(imgui.ImVec2(0, 0), imgui.ImVec2(sw, sh), C.overlay)
 
-                -- Tranches + labels
                 for i, item in ipairs(ITEMS) do
                     local is_h = (i == hovered)
                     local fill
-                    if     item.cat == "arm"  then fill = is_h and C.arm_hov  or C.arm_def
-                    elseif item.cat == "int"  then fill = is_h and C.int_hov  or C.int_def
-                    elseif item.cat == "nav"  then fill = is_h and C.nav_hov  or C.nav_def
-                    else                           fill = is_h and C.veh_hov  or C.veh_def
+                    if     item.cat == "arm" then fill = is_h and C.arm_hov or C.arm_def
+                    elseif item.cat == "int" then fill = is_h and C.int_hov or C.int_def
+                    elseif item.cat == "nav" then fill = is_h and C.nav_hov or C.nav_def
+                    else                          fill = is_h and C.veh_hov or C.veh_def
                     end
                     drawSlice(dl, cx, cy, item.angle, fill)
 
@@ -301,10 +329,8 @@ imgui.OnFrame(
                     drawTextCenter(dl, lx, ly, is_h and C.text_hov or C.text, txt)
                 end
 
-                -- Cercle central
                 dl:AddCircleFilled(imgui.ImVec2(cx, cy), R_IN, C.center, 40)
 
-                -- Texte central : info tranche survolee
                 if hovered > 0 then
                     local item = ITEMS[hovered]
                     local cl   = getLabel(item.cmd):gsub("\n", " ")
@@ -324,28 +350,23 @@ imgui.OnFrame(
                     drawTextCenter(dl, cx, cy, C.hint, "Deplacer\nla souris")
                 end
 
-                -- Clic gauche : selectionner la tranche
                 if imgui.IsMouseClicked(0) and hovered > 0 then
                     selectItem(ITEMS[hovered])
                 end
 
-                -- Clic droit : annuler sans action
                 if imgui.IsMouseClicked(1) then
                     pie_open = false
                 end
             end)
 
-            -- Si erreur de rendu : fermeture de securite (main() liberera les controles)
             if not ok then
                 pie_open = false
             end
         end
 
-        -- Toujours appeles pour maintenir l'etat ImGui coherent
         imgui.End()
         imgui.PopStyleVar(1)
 
-        -- Echap : annuler (hors du Begin/End, toujours evalue)
         if isKeyJustPressed(0x1B) then
             pie_open = false
         end
@@ -369,25 +390,31 @@ function main()
     wait(500)
 
     sampAddChatMessage(
-        "{00AAFF}[LSPD AID]{FFFFFF} Menu Roue v7.3 -- {FFFF00}X{FFFFFF} = ouvrir",
+        "{00AAFF}[LSPD AID]{FFFFFF} Menu Roue v7.4 -- {FFFF00}X{FFFFFF} = ouvrir",
         -1)
 
     while true do
         wait(0)
 
-        -- Execution de la commande selectionnee dans le pie (set par selectItem)
-        -- Fait ici car sampSendChat est sur dans le contexte coroutine main().
+        -- Execution de la commande samp selectionnee dans le pie
         if pending_cmd then
             local cmd = pending_cmd
             pending_cmd = nil
             pcall(sampSendChat, cmd)
         end
 
-        -- Watchdog : si le pie est ferme (par clic, clic droit, Echap, ou erreur)
-        -- mais que les controles sont encore bloques, on les libere ici.
-        -- C'est le filet de securite contre tous les cas de fermeture imprevisibles.
+        -- Watchdog : liberation des controles si le pie est ferme
         if not pie_open and controls_locked then
             unlockControls()
+        end
+
+        -- Simulation de touche Windows apres liberation des controles
+        -- (ex. N = toggle lumieres vehicule cote serveur)
+        if pending_key then
+            local vk = pending_key
+            pending_key = nil
+            _u32.keybd_event(vk, 0, 0, 0)   -- key down
+            _u32.keybd_event(vk, 0, 2, 0)   -- key up
         end
 
         -- Touche X : ouvrir / fermer le pie (debounce 250ms)
@@ -399,6 +426,7 @@ function main()
                 last_toggle = now
                 pie_open = not pie_open
                 if pie_open then
+                    buildActiveItems()
                     target = getNearestPlayer()
                     lockControls()
                 else
