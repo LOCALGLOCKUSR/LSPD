@@ -1,6 +1,6 @@
 script_name("LSPD AID - Menu Roue")
-script_description("Pie menu actions police (taser, menottes, vehicule...)")
-script_version("7.4.0")
+script_description("Pie menu actions police (taser, MDC, vehicule...)")
+script_version("7.5.0")
 script_author("LGU")
 
 -- Compatible : MoonLoader 0.26.5-beta, SAMPFUNCS 5.7.1 rel.25, SA-MP 0.3.DL, GTA SA 1.0 US
@@ -25,55 +25,78 @@ local function mouseXY()
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
+--  KEYBINDS  (raccourcis directs, configures via PDAID_NOTES > Raccourcis)
+-- ════════════════════════════════════════════════════════════════════════════
+
+local KEYBINDS_PATH       = "moonloader/config/pdaid_keybinds.json"
+local keybinds            = {}
+local last_keybinds_check = 0
+
+local function loadKeybinds()
+    local f = io.open(KEYBINDS_PATH, "r")
+    if not f then keybinds = {}; return end
+    local raw = f:read("*a"); f:close()
+    local t = {}
+    for k, v in raw:gmatch('"([^"]+)"%s*:%s*(%d+)') do
+        t[k] = tonumber(v)
+    end
+    keybinds = t
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
 --  ETAT GLOBAL
 -- ════════════════════════════════════════════════════════════════════════════
 
-local pie_open        = false
-local controls_locked = false
-local taser_out       = false
-local beanbag_out     = false
-local plaquage_out    = false
-local balise_on       = false
-local last_toggle     = 0
-local hovered         = -1
-local target          = nil
-local pending_cmd     = nil   -- commande samp a executer dans main()
-local pending_key     = nil   -- VK a simuler dans main() (ex. 0x4E = N pour lumieres)
+local pie_open           = false
+local controls_locked    = false
+local taser_out          = false
+local beanbag_out        = false
+local plaquage_out       = false
+local balise_on          = false
+local current_in_vehicle = false
+local last_toggle        = 0
+local hovered            = -1
+local last_hovered_id    = -1
+local hover_start        = 0
+local hover_fired        = false
+local target             = nil
+local pending_cmd        = nil
+local pending_key        = nil
+
+local HOVER_DELAY = 0.40   -- secondes de survol pour auto-selectionner
 
 -- ════════════════════════════════════════════════════════════════════════════
 --  ITEMS DU PIE
---  in_veh=true : tranche visible uniquement lorsque le joueur est en vehicule
---  needs_id    : ajoute l'ID du joueur le plus proche a la commande
+--  in_veh=true : visible uniquement en vehicule
+--  needs_id    : ajoute l'ID du joueur le plus proche (conserve pour extensions)
 -- ════════════════════════════════════════════════════════════════════════════
 
 local ITEMS_BASE = {
-    { cmd="/taser",        cat="arm",  key="1"                        },
-    { cmd="/beanbag",      cat="arm",  key="2"                        },
-    { cmd="/plaquage",     cat="arm",  key="3"                        },
-    { cmd="/menotter",     cat="int",  key="4", needs_id=true         },
-    { cmd="/demenotter",   cat="int",  key="5", needs_id=true         },
-    { cmd="/911",          cat="int",  key="6"                        },
-    { cmd="/v coffre",     cat="veh",  key="7"                        },
-    { cmd="/v coffrelock", cat="veh",  key="8"                        },
-    { cmd="/v lock",       cat="veh",  key="9"                        },
-    { cmd="/vehporte",     cat="veh",  key="0"                        },
-    { cmd="/balise",       cat="nav",  key="B"                        },
-    { cmd="__lights__",    cat="veh",  key="L",  in_veh=true          },
+    { cmd="/taser",        cat="arm",  key="1"            },
+    { cmd="/beanbag",      cat="arm",  key="2"            },
+    { cmd="/plaquage",     cat="arm",  key="3"            },
+    { cmd="/bdd menu",     cat="int",  key="4"            },
+    { cmd="/911",          cat="int",  key="5"            },
+    { cmd="/v coffre",     cat="veh",  key="6"            },
+    { cmd="/v coffrelock", cat="veh",  key="7"            },
+    { cmd="/v lock",       cat="veh",  key="8"            },
+    { cmd="/vehporte",     cat="veh",  key="9"            },
+    { cmd="/balise",       cat="nav",  key="0"            },
+    { cmd="__lights__",    cat="veh",  key="L", in_veh=true },
 }
 
--- Liste active et geometrie — recalcules a chaque ouverture du pie
 local ITEMS    = {}
-local SEG_HALF = 360/11/2 - 2.5
+local SEG_HALF = 360/10/2 - 2.5
 
 local function buildActiveItems()
-    local in_vehicle = false
+    current_in_vehicle = false
     if PLAYER_PED and PLAYER_PED ~= 0 then
         local ok, r = pcall(isCharInAnyCar, PLAYER_PED)
-        in_vehicle = ok and r
+        current_in_vehicle = ok and r
     end
     ITEMS = {}
     for _, item in ipairs(ITEMS_BASE) do
-        if not item.in_veh or in_vehicle then
+        if not item.in_veh or current_in_vehicle then
             ITEMS[#ITEMS+1] = item
         end
     end
@@ -93,8 +116,7 @@ local LABELS = {
     ["/v coffrelock"] = "Coffre\nLock",
     ["/v lock"]       = "Verrouiller",
     ["/vehporte"]     = "Porte",
-    ["/menotter"]     = "Menotter",
-    ["/demenotter"]   = "Demenotter",
+    ["/bdd menu"]     = "MDC",
     ["/911"]          = "911\nAccepter",
 }
 
@@ -122,10 +144,11 @@ local C = {
     text_hov = 0xFF00FFFF,
     hint     = 0x55FFFFFF,
     no_tgt   = 0xFF3333CC,
+    progress = 0xBBFFFFFF,
 }
 
 -- ════════════════════════════════════════════════════════════════════════════
---  GEOMETRIE  (SEG_HALF est calcule dynamiquement dans buildActiveItems)
+--  GEOMETRIE
 -- ════════════════════════════════════════════════════════════════════════════
 
 local R_OUT  = 178
@@ -133,11 +156,13 @@ local R_IN   = 58
 local R_TEXT = (R_IN + R_OUT) * 0.5
 
 -- ════════════════════════════════════════════════════════════════════════════
---  GESTION CONTROLES (uniquement depuis main())
+--  GESTION CONTROLES
+--  lockControls est desactive en vehicule pour eviter le coup de frein brutal.
 -- ════════════════════════════════════════════════════════════════════════════
 
 local function lockControls()
     if controls_locked then return end
+    if current_in_vehicle then return end
     pcall(lockPlayerControl, true)
     controls_locked = true
 end
@@ -208,12 +233,12 @@ local function buildCmd(item)
     return item.cmd
 end
 
--- Appelee depuis imgui.OnFrame : ne fait QUE setter les flags.
--- wait(), lockPlayerControl(), sampSendChat() sont INTERDITS ici.
+-- selectItem() ne fait QUE setter des flags (pas de wait/sampSendChat/lockControl).
+-- Peut etre appele depuis imgui.OnFrame ET depuis main().
 local function selectItem(item)
     if item.cmd == "__lights__" then
         pending_cmd = "/gyro"
-        pending_key = 0x4E   -- touche N (lumieres vehicule)
+        pending_key = 0x4E
         pie_open    = false
         return
     end
@@ -257,13 +282,25 @@ local function drawTextCenter(dl, x, y, color, text)
     end
 end
 
+-- Arc de progression blanc a l'interieur de la tranche survolee (hover timer).
+local function drawProgressArc(dl, cx, cy, angle_deg, frac)
+    if frac <= 0 then return end
+    local span  = math.rad(SEG_HALF * 2)
+    local a_min = math.rad(angle_deg - SEG_HALF)
+    local a_max = a_min + frac * span
+    local ctr   = imgui.ImVec2(cx, cy)
+    dl:PathArcTo(ctr, R_IN + 9, a_min, a_max, 20)
+    dl:PathArcTo(ctr, R_IN + 2, a_max, a_min, 20)
+    dl:PathFillConvex(C.progress)
+end
+
 -- ════════════════════════════════════════════════════════════════════════════
 --  RENDU PIE MENU
 --
 --  ARCHITECTURE :
 --  imgui.OnFrame => hook D3D9 Present, hors coroutine main().
 --  wait() / lockPlayerControl() / sampSendChat() INTERDITS ici.
---  Toute action se fait dans main() via pending_cmd / pending_key.
+--  Toute action se fait via pending_cmd / pending_key lus dans main().
 -- ════════════════════════════════════════════════════════════════════════════
 
 imgui.OnFrame(
@@ -300,18 +337,39 @@ imgui.OnFrame(
                 local mdeg   = math.deg(math.atan2(dy, dx))
                 if mdeg < 0 then mdeg = mdeg + 360 end
 
-                hovered = -1
+                -- Calcul de la tranche survolee
+                local new_hovered = -1
                 if dist >= R_IN then
                     local best = 181
                     for i, item in ipairs(ITEMS) do
                         local d = math.abs(mdeg - item.angle)
                         if d > 180 then d = 360 - d end
-                        if d < best then best = d; hovered = i end
+                        if d < best then best = d; new_hovered = i end
                     end
                 end
 
+                -- Timer hover : reset si la tranche change
+                if new_hovered ~= last_hovered_id then
+                    last_hovered_id = new_hovered
+                    hover_start     = os.clock()
+                    hover_fired     = false
+                end
+                hovered = new_hovered
+
+                -- Fraction de remplissage (0..1) pour l'arc de progression
+                local hov_frac = 0
+                if hovered > 0 and not hover_fired then
+                    hov_frac = math.min(1.0, (os.clock() - hover_start) / HOVER_DELAY)
+                    if hov_frac >= 1.0 then
+                        hover_fired = true
+                        selectItem(ITEMS[hovered])
+                    end
+                end
+
+                -- Fond semi-transparent
                 dl:AddRectFilled(imgui.ImVec2(0, 0), imgui.ImVec2(sw, sh), C.overlay)
 
+                -- Tranches
                 for i, item in ipairs(ITEMS) do
                     local is_h = (i == hovered)
                     local fill
@@ -322,6 +380,11 @@ imgui.OnFrame(
                     end
                     drawSlice(dl, cx, cy, item.angle, fill)
 
+                    -- Arc de chargement sur la tranche survolee
+                    if is_h and hov_frac > 0 then
+                        drawProgressArc(dl, cx, cy, item.angle, hov_frac)
+                    end
+
                     local a   = math.rad(item.angle)
                     local lx  = cx + R_TEXT * math.cos(a)
                     local ly  = cy + R_TEXT * math.sin(a)
@@ -329,8 +392,10 @@ imgui.OnFrame(
                     drawTextCenter(dl, lx, ly, is_h and C.text_hov or C.text, txt)
                 end
 
+                -- Cercle central
                 dl:AddCircleFilled(imgui.ImVec2(cx, cy), R_IN, C.center, 40)
 
+                -- Info centrale
                 if hovered > 0 then
                     local item = ITEMS[hovered]
                     local cl   = getLabel(item.cmd):gsub("\n", " ")
@@ -350,7 +415,9 @@ imgui.OnFrame(
                     drawTextCenter(dl, cx, cy, C.hint, "Deplacer\nla souris")
                 end
 
-                if imgui.IsMouseClicked(0) and hovered > 0 then
+                -- Clic gauche = selection immediate (sans attendre le timer)
+                if imgui.IsMouseClicked(0) and hovered > 0 and not hover_fired then
+                    hover_fired = true
                     selectItem(ITEMS[hovered])
                 end
 
@@ -382,56 +449,80 @@ function onScriptTerminate()
 end
 
 -- ════════════════════════════════════════════════════════════════════════════
---  BOUCLE PRINCIPALE (coroutine main — seul endroit sur pour wait/lock/samp)
+--  BOUCLE PRINCIPALE (seul endroit sur pour wait/lock/sampSendChat)
 -- ════════════════════════════════════════════════════════════════════════════
 
 function main()
     while not isSampAvailable() do wait(100) end
     wait(500)
+    loadKeybinds()
 
     sampAddChatMessage(
-        "{00AAFF}[LSPD AID]{FFFFFF} Menu Roue v7.4 -- {FFFF00}X{FFFFFF} = ouvrir",
+        "{00AAFF}[LSPD AID]{FFFFFF} Menu Roue v7.5 -- {FFFF00}X{FFFFFF} = ouvrir",
         -1)
 
     while true do
         wait(0)
 
-        -- Execution de la commande samp selectionnee dans le pie
+        -- Execution de la commande selectionnee dans le pie
         if pending_cmd then
             local cmd = pending_cmd
             pending_cmd = nil
             pcall(sampSendChat, cmd)
         end
 
-        -- Watchdog : liberation des controles si le pie est ferme
+        -- Watchdog : liberation des controles si pie ferme
         if not pie_open and controls_locked then
             unlockControls()
         end
 
-        -- Simulation de touche Windows apres liberation des controles
-        -- (ex. N = toggle lumieres vehicule cote serveur)
+        -- Simulation de touche Windows (ex. N = lumieres)
         if pending_key then
             local vk = pending_key
             pending_key = nil
-            _u32.keybd_event(vk, 0, 0, 0)   -- key down
-            _u32.keybd_event(vk, 0, 2, 0)   -- key up
+            _u32.keybd_event(vk, 0, 0, 0)
+            _u32.keybd_event(vk, 0, 2, 0)
+        end
+
+        -- Rechargement des keybinds depuis le fichier (toutes les 5s)
+        local now = os.clock()
+        if now - last_keybinds_check > 5 then
+            loadKeybinds()
+            last_keybinds_check = now
+        end
+
+        -- Detection chat/dialog actif (reutilise pour X et hotkeys)
+        local ok1, ch = pcall(sampIsChatInputActive)
+        local ok2, dg = pcall(sampIsDialogActive)
+        local input_active = (ok1 and ch) or (ok2 and dg)
+
+        -- Raccourcis directs (configures via PDAID_NOTES > Raccourcis)
+        if not pie_open and not input_active then
+            for _, item in ipairs(ITEMS_BASE) do
+                if item.cmd ~= "__lights__" then
+                    local vk = keybinds[item.cmd]
+                    if vk and vk > 0 and isKeyJustPressed(vk) then
+                        target = getNearestPlayer()
+                        selectItem(item)
+                        break
+                    end
+                end
+            end
         end
 
         -- Touche X : ouvrir / fermer le pie (debounce 250ms)
-        local now = os.clock()
-        if now - last_toggle > 0.25 and isKeyJustPressed(0x58) then
-            local ok1, ch = pcall(sampIsChatInputActive)
-            local ok2, dg = pcall(sampIsDialogActive)
-            if (not ok1 or not ch) and (not ok2 or not dg) then
-                last_toggle = now
-                pie_open = not pie_open
-                if pie_open then
-                    buildActiveItems()
-                    target = getNearestPlayer()
-                    lockControls()
-                else
-                    unlockControls()
-                end
+        if not input_active and now - last_toggle > 0.25 and isKeyJustPressed(0x58) then
+            last_toggle = now
+            pie_open    = not pie_open
+            if pie_open then
+                buildActiveItems()
+                target          = getNearestPlayer()
+                lockControls()
+                last_hovered_id = -1
+                hover_start     = 0
+                hover_fired     = false
+            else
+                unlockControls()
             end
         end
     end

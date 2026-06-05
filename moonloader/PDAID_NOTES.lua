@@ -185,6 +185,72 @@ local open_new_flag = false
 local open_del_flag = false
 
 -- ============================================================================
+--  KEYBINDS UI  (onglet Raccourcis dans la colonne droite)
+-- ============================================================================
+
+local KEYBINDS_PATH_NB = "moonloader/config/pdaid_keybinds.json"
+local nb_keybinds      = {}
+local nb_right_tab     = imgui.new.int(0)   -- 0 = Couleurs, 1 = Raccourcis
+local listening_cmd    = nil
+
+local QMENU_ITEMS_CFG = {
+    { cmd="/taser",        label="Taser"    },
+    { cmd="/beanbag",      label="Beanbag"  },
+    { cmd="/plaquage",     label="Plaquage" },
+    { cmd="/bdd menu",     label="MDC"      },
+    { cmd="/911",          label="911"      },
+    { cmd="/v coffre",     label="Coffre"   },
+    { cmd="/v coffrelock", label="C.Lock"   },
+    { cmd="/v lock",       label="V.Lock"   },
+    { cmd="/vehporte",     label="Porte"    },
+    { cmd="/balise",       label="Balise"   },
+}
+
+local BINDABLE_VKS = {
+    0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,  -- F1-F8
+    0x78,                                               -- F9
+    -- 0x79 = F10 exclu (toggle carnet)
+    0x7A, 0x7B,                                        -- F11-F12
+    0x60, 0x61, 0x62, 0x63, 0x64,                     -- Num0-4
+    0x65, 0x66, 0x67, 0x68, 0x69,                     -- Num5-9
+}
+
+local VK_NAMES = {
+    [0x70]="F1",   [0x71]="F2",   [0x72]="F3",   [0x73]="F4",
+    [0x74]="F5",   [0x75]="F6",   [0x76]="F7",   [0x77]="F8",
+    [0x78]="F9",   [0x7A]="F11",  [0x7B]="F12",
+    [0x60]="Num0", [0x61]="Num1", [0x62]="Num2", [0x63]="Num3", [0x64]="Num4",
+    [0x65]="Num5", [0x66]="Num6", [0x67]="Num7", [0x68]="Num8", [0x69]="Num9",
+}
+
+local function vkname(vk)
+    if not vk or vk == 0 then return "Aucun" end
+    return VK_NAMES[vk] or ("VK"..vk)
+end
+
+local function save_keybinds_nb()
+    local f = io.open(KEYBINDS_PATH_NB, "w")
+    if not f then return end
+    local parts = {}
+    for cmd, vk in pairs(nb_keybinds) do
+        parts[#parts+1] = '"' .. cmd:gsub('"', '\\"') .. '":' .. tostring(vk)
+    end
+    f:write("{" .. table.concat(parts, ",") .. "}")
+    f:close()
+end
+
+local function load_keybinds_nb()
+    local f = io.open(KEYBINDS_PATH_NB, "r")
+    if not f then nb_keybinds = {}; return end
+    local raw = f:read("*a"); f:close()
+    local t = {}
+    for k, v in raw:gmatch('"([^"]+)"%s*:%s*(%d+)') do
+        t[k] = tonumber(v)
+    end
+    nb_keybinds = t
+end
+
+-- ============================================================================
 --  SAVE / LOAD
 -- ============================================================================
 
@@ -358,6 +424,60 @@ local function colorize_text(text)
 end
 
 -- ============================================================================
+--  ONGLET RACCOURCIS
+-- ============================================================================
+
+local function draw_raccourcis_tab()
+    if listening_cmd then
+        imgui.Dummy(imgui.ImVec2(0, 4))
+        imgui.TextColored(imgui.ImVec4(1.0, 1.0, 0.0, 1.0), "Appuyez sur")
+        imgui.TextColored(imgui.ImVec4(1.0, 1.0, 0.0, 1.0), "une touche...")
+        imgui.Dummy(imgui.ImVec2(0, 2))
+        imgui.TextDisabled("Echap = annuler")
+        imgui.Separator()
+        imgui.TextDisabled("F1-F9, F11-F12")
+        imgui.TextDisabled("Num0 - Num9")
+
+        if isKeyJustPressed(0x1B) then
+            listening_cmd = nil
+        else
+            for _, vk in ipairs(BINDABLE_VKS) do
+                if isKeyJustPressed(vk) then
+                    nb_keybinds[listening_cmd] = vk
+                    listening_cmd = nil
+                    save_keybinds_nb()
+                    break
+                end
+            end
+        end
+        return
+    end
+
+    imgui.TextDisabled("-- Raccourcis --")
+    imgui.Separator()
+    imgui.TextDisabled("Touche directe sans")
+    imgui.TextDisabled("ouvrir le menu X.")
+    imgui.Dummy(imgui.ImVec2(0, 4))
+
+    for _, entry in ipairs(QMENU_ITEMS_CFG) do
+        local vk = nb_keybinds[entry.cmd] or 0
+        local kn = vkname(vk)
+        imgui.Text(entry.label)
+        imgui.SameLine(75)
+        if imgui.SmallButton(kn .. "##kb_" .. entry.cmd) then
+            listening_cmd = entry.cmd
+        end
+        if vk > 0 then
+            imgui.SameLine()
+            if imgui.SmallButton("[X]##rm" .. entry.cmd) then
+                nb_keybinds[entry.cmd] = 0
+                save_keybinds_nb()
+            end
+        end
+    end
+end
+
+-- ============================================================================
 --  COLONNE GAUCHE
 -- ============================================================================
 
@@ -472,6 +592,25 @@ end
 -- ============================================================================
 
 local function draw_right_col()
+    -- Onglets manuels (BeginTabBar non disponible dans cette version de mimgui)
+    local is_col = (nb_right_tab[0] == 0)
+    local is_rc  = (nb_right_tab[0] == 1)
+    if is_col then imgui.PushStyleColorU32(imgui.Col.Button, imgui.U32(0.25, 0.25, 0.55, 1.0)) end
+    if imgui.SmallButton("Couleurs##rtab0")   then nb_right_tab[0] = 0 end
+    if is_col then imgui.PopStyleColor(1) end
+    imgui.SameLine()
+    if is_rc  then imgui.PushStyleColorU32(imgui.Col.Button, imgui.U32(0.25, 0.25, 0.55, 1.0)) end
+    if imgui.SmallButton("Raccourcis##rtab1") then nb_right_tab[0] = 1 end
+    if is_rc  then imgui.PopStyleColor(1) end
+    imgui.Separator()
+
+    if nb_right_tab[0] == 1 then
+        draw_raccourcis_tab()
+        return
+    end
+
+    -- ---- Onglet 0 : Couleurs ----
+
     imgui.TextDisabled("-- Colorisation --")
     imgui.Separator()
 
@@ -751,6 +890,7 @@ end
 
 function main()
     load_notebook()
+    load_keybinds_nb()
     if isSampAvailable then
         while not isSampAvailable() do wait(100) end
     end
